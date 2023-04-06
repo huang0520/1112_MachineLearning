@@ -1,0 +1,7 @@
+# Ignored folder
+Class_material
+.ipynb_checkpoints
+
+# Ignored file
+.prettierrc
+*.pdf
