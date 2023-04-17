@@ -15,4 +15,4 @@ HW2.ipynb 中使用numpy實現 2 layer NN 及 3 layer NN，並繪製 model 的 l
 此段通過 numpy 實現使用 SGD 作為 back propagation 的方式，並以 cross-entropy 作為 loss function。
 
 5. Decision region function
-此段定義了繪製 decision region 的 function。
+此段定義了繪製 decision region 的 function。其中後方顏色區塊是使用 model 去預測圖片 1000 x 1000 的點並繪製，而前方分布的點則是實際資料，以此可以去分析 model。
