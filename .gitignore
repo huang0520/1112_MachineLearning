@@ -5,4 +5,5 @@ Class_material
 # Ignored file
 .prettierrc
 *.pdf
+*.log
 .DS_Store
