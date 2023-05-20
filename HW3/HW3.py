@@ -3,10 +3,11 @@ import numpy as np
 import numpy.linalg as la
 import matplotlib.pyplot as plt
 import seaborn as sns
+import xgboost as xgb
 
 
 # Set random state
-rng = np.random.default_rng(10)
+rng = np.random.default_rng(100)
 
 
 def read_data():
@@ -49,24 +50,8 @@ def random_split(x, y):
     return x_train, x_validate, x_test, y_train, y_validate, y_test
 
 
-def normalize(x):
-    """
-    Normalize the array
-
-    Args:
-        x : numpy array
-
-    Returns:
-        normalized array
-    """
-    x_maxs = np.max(x, axis=0)
-    x_mins = np.min(x, axis=0)
-
-    return (x - x_mins) / (x_maxs - x_mins)
-
-
 def calMSE(predict: np.ndarray, actual: np.ndarray):
-    return np.mean((predict - actual) ** 2)
+    return np.mean((predict.ravel() - actual.ravel()) ** 2)
 
 
 def expand(x):
@@ -82,104 +67,78 @@ def expand(x):
     return np.concatenate([np.ones((x.shape[0], 1)), x], axis=1)
 
 
-def get_gaussian_matrix(x, n_centroid=10):
+def get_polynomial_basis(x):
+    def poly_basis_function(x):
+        x = x.reshape(-1, 1)
+        tmp = x @ x.T
+        i, j = np.tril_indices_from(tmp)
+        return tmp[i, j].ravel()
+
+    power_x = np.apply_along_axis(poly_basis_function, 1, x)
+    return expand(np.concatenate([x, power_x], axis=1))
+
+
+def MLR(x_train, y_train, x_test, lamda):
     """
-    Calculate the gaussian basis matrix.
+    Maximum likelihood and least square regression
 
     Args:
-        x : feature set
-        n_centroid : Number of centroid (mu). Defaults to 10.
+        x_train : training feature set
+        y_train : training label
+        x_test : test feature set
+        lamda : regularization coefficient
 
     Returns:
-        gaussian basis matrix
+        test label prediction
     """
-
-    def gaussian_basis_function(x, mu, sigma):
-        return np.exp(-0.5 * (x - mu) ** 2 / sigma**2)
-
-    def cal_pairwise_dis(x):
-        x_cross = x @ x.T
-        x_norm = np.repeat(
-            np.diag(x_cross).reshape([1, -1]), x.shape[0], axis=0
-        )
-        return np.median(x_norm + x_norm.T - 2 * x_cross)
-
-    # Using pairwise distance as sigma
-    std = cal_pairwise_dis(x)
-
-    x_maxs = np.max(x, axis=0)
-    x_mins = np.min(x, axis=0)
-
-    centroids = np.linspace(x_maxs, x_mins, n_centroid, axis=0)
-
-    phi = [gaussian_basis_function(x, centroid, std) for centroid in centroids]
-    phi = np.concatenate(phi, axis=1)
-
-    return expand(phi)
-
-
-def plot_OLS(x, y):
-    """
-    Plot the ordinary least square line
-
-    Args:
-        x
-        y
-    """
-    dx = np.linspace(x.min(), x.max(), 100)
-    m, n = np.polyfit(x, y, 1)
-    plt.plot(dx, m * dx + n, c="r", ls="dashed")
-
-
-def MLR(x_train, y_train, x_test, lamda, n_centroid=10):
-    x_basisMatrix = get_gaussian_matrix(x_train, n_centroid)
+    x_phi = get_polynomial_basis(x_train)
     weight = (
-        la.inv(
-            x_basisMatrix.T @ x_basisMatrix
-            + lamda * np.identity(x_basisMatrix.shape[1])
-        )
-        @ x_basisMatrix.T
+        la.inv(x_phi.T @ x_phi + lamda * np.identity(x_phi.shape[1]))
+        @ x_phi.T
         @ y_train
     )
 
-    y_basisMatrix = get_gaussian_matrix(x_test, n_centroid)
-    return y_basisMatrix @ weight
+    y_phi = get_polynomial_basis(x_test)
+    return y_phi @ weight
 
 
-def posterior(phi, t, alpha, beta, return_inverse=False):
+def posterior(phi, t, alpha, beta):
+    """
+    Calculate the posterior distribution of training set
+
+    Args:
+        phi : basis matrix of training feature
+        t : target (label) of training set
+        alpha : initial alpha
+        beta : initial beta
+
+    Returns:
+        mean and variance of posterior distribution
+    """
     S_N_inv = alpha * np.eye(phi.shape[1]) + beta * phi.T @ phi
     S_N = la.inv(S_N_inv)
     m_N = beta * S_N @ phi.T @ t
 
-    return (m_N, S_N) if not return_inverse else (m_N, S_N, S_N_inv)
+    return m_N, S_N
 
 
 def posterior_predictive(phi_test, m_N, S_N, beta):
+    """
+    Predict the posterior distribution
+
+    Args:
+        phi_test : basis matrix of testing feature
+        m_N : mean of training posterior distribution
+        S_N : variance of training posterior distribution
+        beta  beta
+
+    Returns:
+        mean and variance of test label prediction distribution
+    """
     y = phi_test @ m_N
     y_var = 1 / beta + phi_test @ S_N @ phi_test.T
 
     return y, y_var
-
-
-def log_marginal_likelihood(phi, t, alpha, beta):
-    """Computes the log of the marginal likelihood."""
-    N, M = phi.shape
-
-    m_N, _, S_N_inv = posterior(phi, t, alpha, beta, return_inverse=True)
-
-    E_D = beta * np.sum((t - phi @ m_N) ** 2)
-    E_W = alpha * np.sum(m_N**2)
-
-    score = (
-        M * np.log(alpha)
-        + N * np.log(beta)
-        - E_D
-        - E_W
-        - np.log(la.det(S_N_inv))
-        - N * np.log(2 * np.pi)
-    )
-
-    return 0.5 * score
 
 
 def fit(phi, t, alpha_0=1e-5, beta_0=1e-5, max_iter=200, rtol=1e-5):
@@ -207,22 +166,85 @@ def fit(phi, t, alpha_0=1e-5, beta_0=1e-5, max_iter=200, rtol=1e-5):
         if np.isclose(alpha_prev, alpha, rtol=rtol) and np.isclose(
             beta_prev, beta, rtol=rtol
         ):
-            print(f"Convergence after {i + 1} iterations.")
             return alpha, beta, m_N, S_N
 
-    print(f"Stopped after {max_iter} iterations.")
     return alpha, beta, m_N, S_N
 
 
-def BLR(x_train, y_train, x_test, n_centroid=10):
-    phi_train = get_gaussian_matrix(normalize(x_train), n_centroid)
-    phi_test = get_gaussian_matrix(normalize(x_test), n_centroid)
+def get_sample(phi_test, m_N, S_N):
+    w_samples = rng.multivariate_normal(m_N.ravel(), S_N, 10, "ignore").T
 
-    # m_N, S_N = posterior(phi_train, y_train, alpha, beta)
+    return phi_test @ w_samples
+
+
+def BLR(x_train, y_train, x_test):
+    phi_train = get_polynomial_basis(x_train)
+    phi_test = get_polynomial_basis(x_test)
+
     alpha, beta, m_N, S_N = fit(phi_train, y_train, rtol=10**-5)
     y, y_var = posterior_predictive(phi_test, m_N, S_N, beta)
 
-    return m_N, S_N, y, y_var
+    y_samples = get_sample(phi_test, m_N, S_N)
+
+    return y, y_samples
+
+
+def plot_OLS(ax, x, y, c="black", ls="-", label=None):
+    """
+    Plot the ordinary least square line
+
+    Args:
+        x
+        y
+    """
+    dx = np.linspace(x.min(), x.max(), 100)
+    m, n = np.polyfit(x, y, 1)
+    ax.plot(dx, m * dx + n, c=c, ls=ls, label=label)
+
+
+def plot_scatter(ax, x, y, label):
+    ax.scatter(x, y, s=10, edgecolors="w", linewidths=0.1, label=label)
+
+
+def plot_MLR(x, y_truth, y_MLR):
+    fig, ax = plt.subplots()
+    plot_scatter(ax, x, y_truth, "Observation")
+    plot_OLS(ax, x, y_MLR, ls="--", label="OLS fit")
+    ax.set_title("MLR Predict")
+    ax.set_xlabel("Duration (min)")
+    ax.set_ylabel("Calories")
+    ax.legend()
+    plt.show()
+
+
+def plot_BLR(x, y_truth, y_BLR, y_samples):
+    fig, ax = plt.subplots()
+    plot_scatter(ax, x, y_truth, "Observation")
+
+    for sample in y_samples.T:
+        plot_OLS(ax, x, sample, c="r", label="Bayesian Posterior Fits")
+    plot_OLS(ax, x, y_BLR, ls="--", label="OLS Fit")
+
+    handles, labels = ax.get_legend_handles_labels()
+    new_handles, new_labels = [], []
+
+    for handle, label in zip(handles, labels):
+        if label not in new_labels:
+            new_labels.append(label)
+            new_handles.append(handle)
+
+    ax.legend(new_handles, new_labels)
+    ax.set_xlabel("Duration (min)")
+    ax.set_ylabel("Calories")
+    ax.set_title("Posterior Predictions with Limited Observations")
+    plt.show()
+
+
+def xgbr(x_train, y_train, x_test):
+    xgbr = xgb.XGBRegressor()
+    xgbr.fit(x_train, y_train)
+
+    return xgbr.predict(x_test)
 
 
 def main():
@@ -232,13 +254,22 @@ def main():
     )
 
     # Predict through MLR
-    y_MLR_pred = MLR(normalize(x_train), y_train, normalize(x_test), 0.1)
+    y_MLR = MLR(x_train, y_train, x_test, 0.1)
 
     # Predict through BLR
-    m_N, S_N, y_BLR_mean, y_BLR_var = BLR(x_train, y_train, x_validate, 10)
+    y_BLR, y_samples = BLR(x_train, y_train, x_test)
 
-    print(f"MSE of MLR: {calMSE(y_MLR_pred, y_test)}")
-    print(f"MSE of BLR: {calMSE(y_BLR_mean, y_validate)}")
+    # Predict through XGBoost
+    y_XGBR = xgbr(x_train, y_train, x_test)
+
+    print("========== MSE ==========")
+    print(f"{'MLR:' : <10}{calMSE(y_MLR, y_test)}")
+    print(f"{'BLR:' : <10}{calMSE(y_BLR, y_test)}")
+    print(f"{'XGBoost:' : <10}{calMSE(y_XGBR, y_test)}")
+    print("=========================")
+
+    plot_MLR(x_test[:, 3], y_test, y_MLR)
+    plot_BLR(x_test[:, 3], y_test, y_BLR, y_samples)
 
 
 if __name__ == "__main__":
