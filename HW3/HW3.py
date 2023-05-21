@@ -15,7 +15,7 @@ def read_data():
     Read the data
 
     Returns:
-        feature data, label data
+        feature data, target data
     """
     x_read = pd.read_csv("./exercise.csv")
     y_read = pd.read_csv("./calories.csv")
@@ -32,10 +32,10 @@ def random_split(x, y):
 
     Args:
         x : feature set
-        y : label set
+        y : target set
 
     Returns:
-        features of train, test, validate, label of train, test, validate
+        features of train, test, validate, target of train, test, validate
     """
     idx_rng = rng.permutation(len(x))
 
@@ -51,24 +51,54 @@ def random_split(x, y):
 
 
 def calMSE(predict: np.ndarray, actual: np.ndarray):
+    """
+    Calculate the mean square error
+
+    Args:
+        predict : prediction target
+        actual : actual target
+
+    Returns:
+        MSE
+    """
     return np.mean((predict.ravel() - actual.ravel()) ** 2)
 
 
 def expand(x):
     """
-    Expand a columns front of phi matrix
+    Expand a columns front of basis matrix
 
     Args:
-        x : phi
+        x : basis matrix
 
     Returns:
-        expanded phi
+        expanded basis matrix
     """
     return np.concatenate([np.ones((x.shape[0], 1)), x], axis=1)
 
 
 def get_polynomial_basis(x):
+    """
+    Get the polynomial basis of features
+
+    Args:
+        x: feature set
+
+    Return:
+        The polynomial basis matrix
+    """
+
     def poly_basis_function(x):
+        """
+        Get polynomial function of one feature set.
+        [x1, x2, x1^2, x2^2, x1*x2]
+
+        Args:
+            x : feature set
+
+        Returns:
+            set of polynomial basis function
+        """
         x = x.reshape(-1, 1)
         tmp = x @ x.T
         i, j = np.tril_indices_from(tmp)
@@ -84,12 +114,12 @@ def MLR(x_train, y_train, x_test, lamda):
 
     Args:
         x_train : training feature set
-        y_train : training label
+        y_train : training target
         x_test : test feature set
         lamda : regularization coefficient
 
     Returns:
-        test label prediction
+        test target prediction
     """
     x_phi = get_polynomial_basis(x_train)
     weight = (
@@ -108,7 +138,7 @@ def posterior(phi, t, alpha, beta):
 
     Args:
         phi : basis matrix of training feature
-        t : target (label) of training set
+        t : target of training set
         alpha : initial alpha
         beta : initial beta
 
@@ -133,7 +163,7 @@ def posterior_predictive(phi_test, m_N, S_N, beta):
         beta  beta
 
     Returns:
-        mean and variance of test label prediction distribution
+        mean and variance of test target prediction distribution
     """
     y = phi_test @ m_N
     y_var = 1 / beta + phi_test @ S_N @ phi_test.T
@@ -141,7 +171,21 @@ def posterior_predictive(phi_test, m_N, S_N, beta):
     return y, y_var
 
 
-def fit(phi, t, alpha_0=1e-5, beta_0=1e-5, max_iter=200, rtol=1e-5):
+def fit(phi, y, alpha_0=1e-5, beta_0=1e-5, max_iter=200, rtol=1e-5):
+    """
+    Maximizing the evidence function to get the optimal alpha and beta.
+
+    Args:
+        Phi: basis matrix.
+        y: training target.
+        alpha_0: initial value for alpha.
+        beta_0: initial value for beta.
+        max_iter: maximum number of iterations.
+        rtol: convergence criterion.
+
+    Returns:
+        alpha, beta, posterior mean, posterior covariance.
+    """
     N, M = phi.shape
 
     eigenvalues_0 = la.eigvalsh(phi.T @ phi)
@@ -155,12 +199,12 @@ def fit(phi, t, alpha_0=1e-5, beta_0=1e-5, max_iter=200, rtol=1e-5):
 
         eigenvalues = eigenvalues_0 * beta
 
-        m_N, S_N = posterior(phi, t, alpha, beta)
+        m_N, S_N = posterior(phi, y, alpha, beta)
 
         gamma = np.sum(eigenvalues / (eigenvalues + alpha))
         alpha = gamma / np.sum(m_N**2)
 
-        beta_inv = 1 / (N - gamma) * np.sum((t - phi @ m_N) ** 2)
+        beta_inv = 1 / (N - gamma) * np.sum((y - phi @ m_N) ** 2)
         beta = 1 / beta_inv
 
         if np.isclose(alpha_prev, alpha, rtol=rtol) and np.isclose(
@@ -172,12 +216,35 @@ def fit(phi, t, alpha_0=1e-5, beta_0=1e-5, max_iter=200, rtol=1e-5):
 
 
 def get_sample(phi_test, m_N, S_N):
+    """
+    According to the training set posterior distribution
+    randomly generator sample lines
+
+    Args:
+        phi_test : basis matrix of test feature
+        m_N : mean of posterior distribution
+        S_N : Covariance of posterior distribution
+
+    Returns:
+       Sampled targets
+    """
     w_samples = rng.multivariate_normal(m_N.ravel(), S_N, 10, "ignore").T
 
     return phi_test @ w_samples
 
 
 def BLR(x_train, y_train, x_test):
+    """
+    Bayesian linear regression
+
+    Args:
+        x_train : training features
+        y_train : training target
+        x_test : testing feature
+
+    Returns:
+        mean and samples of prediction
+    """
     phi_train = get_polynomial_basis(x_train)
     phi_test = get_polynomial_basis(x_test)
 
